@@ -9,7 +9,7 @@ module RISCuva0 ( clk, reset,
  				  dataIn, dataOut,
 				  portAddress, portRead, portWrite,
  				  intReq, intAck );
-
+//---------------------------------------------------------------------------------
 	// Inputs and outputs:
 	input 	clk, reset; 		// Clock and Reset
 	
@@ -25,7 +25,14 @@ module RISCuva0 ( clk, reset,
 	output portWrite; 			// Write signal
 	input intReq; 				// Interrupt request
 	output intAck; 				// Interrupt Acknowledge
-	
+		
+//---------------------------------------------------------------------------------	
+    // internal signals (defined later, see below)	
+    logic [7:0] dataBus; 					// Data bus for all operations
+	logic [2+9:0] stackValue; 				// Internal stack output
+	logic zeroFlag, carryFlag; 				// DFFs used by flags
+
+//---------------------------------------------------------------------------------	
 	// Instruction decoding from the instruction code:
 	logic [13:0] opCode; 	
 	logic [1:0] opA; 
@@ -36,10 +43,6 @@ module RISCuva0 ( clk, reset,
 	logic [9:0] immAddr;
 	logic [7:0] immData;
 	logic [4:0] immPort;
-    logic MISC,JP,LOAD,ALU,CALL,GOTO,RETS,MOVOUT,RETN,RETI;
-	logic DI,EI,FLAG_Z,FLAG_NZ,FLAG_C,FLAG_NC,LOGIX,ARITH;
-	logic SHIFT,MOVIN,MOV,XNOR,OR,AND,ADD,ADC,SUB,SBC,ASR;
-	logic RRC,ROR,ROL,IND,SEQ,DIR; 
 
 	assign opCode = progData; 	// Instruction code
 	assign opA = opCode[13:12]; // 1st operation code
@@ -51,8 +54,13 @@ module RISCuva0 ( clk, reset,
 	assign immData = opCode[11:4]; // Immediate data
 	assign immPort = opCode[ 8:4]; // For direct access
 	
-	
-assign MISC = (opA == 2'b00);
+//---------------------------------------------------------------------------------	
+    logic MISC, JP, LOAD, ALU, CALL, GOTO, RETS, MOVOUT, RETN, RETI;
+	logic DI, EI, FLAG_Z, FLAG_NZ, FLAG_C, FLAG_NC, LOGIX, ARITH;
+	logic SHIFT, MOVIN, MOV, XNOR, OR, AND, ADD, ADC, SUB, SBC, ASR;
+	logic RRC, ROR, ROL, IND, SEQ, DIR; 
+		
+    assign MISC = (opA == 2'b00);
 	assign JP = (opA == 2'b01);
 	assign LOAD = (opA == 2'b10);
 	assign ALU = (opA == 2'b11);
@@ -94,15 +102,11 @@ assign MISC = (opA == 2'b00);
 	
 	assign IND = (opC == 2'b00);
 	assign SEQ = (opC == 2'b01);
-	assign DIR = (opC >= 2'b10); 
+	assign DIR = (opC >= 2'b10); 	
 	
-	// General Resources:
-	reg zeroFlag, carryFlag; 				// DFFs used by flags
-	logic [7:0] dataBus; 					// Data bus for all operations
-	logic [2+9:0] stackValue; 				// Internal stack output
-	
+//---------------------------------------------------------------------------------
 	// Register file (r0-r15) and operand buses: 
-	reg [7:0] registerFile[0:15]; 			// 16x8 dual-port memory
+	logic [7:0] registerFile[0:15]; 			// 16x8 dual-port memory
 	always@(posedge clk)
 	begin
 	    if (reset)
@@ -118,20 +122,24 @@ assign MISC = (opA == 2'b00);
 	logic [7:0] busM;
 	assign busM = registerFile[rM]; 	// Async. read of rM
 	
+//---------------------------------------------------------------------------------
 	// Port signals for direct, indirect and sequential accesses: 
-	reg [7:0] nextPort;
+	logic [7:0] nextPort;
 	always@(posedge clk)
 	begin
-		if (portRead | portWrite)
-			nextPort <= portAddress + 1; 	// For sequential use
-	end
+        if (reset)
+            nextPort <= 0;
+        else if (portRead | portWrite)
+            nextPort <= portAddress + 1; 	// For sequential use
+    end
 	assign dataOut = busN; 					// Output from rN
 	assign portRead = ALU & MOVIN; 			// Read signal
 	assign portWrite = MISC & MOVOUT; 		// Write signal
 	assign portAddress = IND ? busM : 		// Indirect
 						 SEQ ? nextPort :	// Sequent.
 							   {3'b111,immPort}; // Direct
-	
+
+//---------------------------------------------------------------------------------
 	// Logic ALU: AND, OR, XNOR and MOV.
 	logic logicCarry;
 	assign logicCarry = AND ? 1'b1 : OR ? 1'b0 : carryFlag;
@@ -158,7 +166,8 @@ assign MISC = (opA == 2'b00);
 						RRC ? {carryFlag, busN} :
 						ROR ? {busN[0], busN} :
 							  {busN[6:0], busN[7], busN[7]};
-	
+
+//---------------------------------------------------------------------------------
 	// This data bus collects results from all sources:
 	always_comb
 	begin
@@ -169,6 +178,8 @@ assign MISC = (opA == 2'b00);
         dataBus = (((ALU | JP) & SHIFT) == 1)   ? shiftALU  : dataBus;
         dataBus = (((ALU | JP) & MOVIN) == 1)   ? dataIn    : dataBus;         
 	end
+	
+//---------------------------------------------------------------------------------	
 	// Interrupt Controller:
 	logic userEI, callingIRQ, intAck;
 	logic mayIRQ;
@@ -179,6 +190,7 @@ assign MISC = (opA == 2'b00);
 	assign validIRQ = intReq & ~intAck & userEI & mayIRQ;
 	logic [9:0] destIRQ;
 	assign destIRQ = callingIRQ ? 10'h001 : 10'h000;
+	
 	always@(posedge clk)
 	begin
 		if (reset) 					 userEI <= 0;
@@ -193,6 +205,7 @@ assign MISC = (opA == 2'b00);
 		else 						 callingIRQ <= validIRQ;
 	end
 
+//---------------------------------------------------------------------------------
 	// Flag DFFs:
 	always@(posedge clk)
 	begin
@@ -208,16 +221,16 @@ assign MISC = (opA == 2'b00);
 		end
 	end
 
-	// 'validFlag' evaluates one of four conditions for jumps.
-	logic validFlag;
-	assign validFlag = FLAG_Z ?   zeroFlag :
-				 	 FLAG_NZ ? ~zeroFlag :
-					 FLAG_C ?  carryFlag :
-							  ~carryFlag ; 
-	
+//---------------------------------------------------------------------------------
 	// Program Counter (PC): the address of current instruction.
 	logic [9:0] PC;
 	logic [9:0] nextPC, incrPC;
+	
+    logic validFlag;
+	assign validFlag = FLAG_Z ?   zeroFlag :
+				 	 FLAG_NZ ? ~zeroFlag :
+					 FLAG_C ?  carryFlag :
+							  ~carryFlag ; 	
 	logic onRet;
 	assign onRet = MISC & RETS & (RETN | RETI);
 	logic onJump;
@@ -240,11 +253,13 @@ assign MISC = (opA == 2'b00);
             PC <= nextPC;
     end
 
-	// When using Xilinx BlockRAM as program memory:
+//---------------------------------------------------------------------------------
+	// Program memory signals
 	assign progAddress = nextPC;
 	assign progReset = (reset == 1) ? 1 : validIRQ; 
 
-	// Internal stack for returning addresses (16 levels):
+//---------------------------------------------------------------------------------
+	// STACK: Internal stack for returning addresses (16 levels):
 	logic [3:0] SP; // Stack Pointer register
 	always@(posedge clk)
 	begin
@@ -263,4 +278,5 @@ assign MISC = (opA == 2'b00);
 	end
 
 	assign stackValue = stackMem[mySP]; 
-endmodule 	/// RISCuva1 (all in one file!)
+	
+endmodule 	/// RISCuva0 (all in one file!)
